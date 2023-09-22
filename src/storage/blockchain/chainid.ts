@@ -10,6 +10,9 @@ export const CHAIN_IDS: { [key: string]: number } = {
   polygon: 137,
   'polygon:main': 137,
   'polygon:mumbai': 80001,
+  shibarium: 719,
+  'shibarium:main': 109,
+  'shibarium:puppynet': 719,
   zkevm: 1101,
   'zkevm:main': 1101,
   'zkevm:test': 1442

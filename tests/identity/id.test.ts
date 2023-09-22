@@ -105,6 +105,32 @@ describe('identity', () => {
 
     expect((await claimsTree.root()).bigInt()).not.to.equal(0);
   });
+  it('createShibIdentity', async () => {
+    const seedPhrase: Uint8Array = byteEncoder.encode('seedseedseedseedseedseedseedseed');
+
+    const { did, credential } = await wallet.createIdentity({
+      method: DidMethod.Shib,
+      blockchain: Blockchain.Shibarium,
+      networkId: NetworkId.PuppyNet,
+      seed: seedPhrase,
+      revocationOpts: {
+        type: CredentialStatusType.Iden3ReverseSparseMerkleTreeProof,
+        id: 'http://rhs.com/node'
+      }
+    });
+    expect(did.string()).to.equal(
+      'did:shib:shibarium:puppynet:3tCvUVMzGRg1KhHdNA3sYggZmdyvNriLdGAE58JFD7'
+    );
+    const dbCred = await dataStorage.credential.findCredentialById(credential.id);
+    expect(credential).to.deep.equal(dbCred);
+
+    const claimsTree = await dataStorage.mt.getMerkleTreeByIdentifierAndType(
+      did.string(),
+      MerkleTreeType.Claims
+    );
+
+    expect((await claimsTree.root()).bigInt()).not.to.equal(0);
+  });
   it('createProfile', async () => {
     const seedPhrase: Uint8Array = byteEncoder.encode('seedseedseedseedseedseedseedseed');
 
