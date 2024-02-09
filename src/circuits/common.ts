@@ -5,7 +5,7 @@ import { TreeState } from './models';
 export const defaultMTLevels = 40; // max MT levels, default value for identity circuits
 export const defaultValueArraySize = 64; // max value array size, default value for identity circuits
 export const defaultMTLevelsOnChain = 64; // max MT levels on chain, default value for identity circuits
-export const defaultMTLevelsClaimsMerklization = 32; // max MT levels of JSON-LD merklization on claim
+export const defaultMTLevelsClaim = 32; // max MT levels of JSON-LD merklization on claim
 
 export const ErrorEmptyAuthClaimProof = 'empty auth claim mtp proof';
 export const ErrorEmptyAuthClaimNonRevProof = 'empty auth claim non-revocation mtp proof';
@@ -29,7 +29,7 @@ export class BaseConfig {
   mtLevel!: number; // Max levels of MT
   valueArraySize!: number; // Size if( value array in identity circuit)s
   mtLevelOnChain!: number;
-  mtLevelClaimsMerklization!: number; // max levels in the merklization
+  mtLevelClaim!: number; // Max level of JSONLD claim
 
   /**
    *  getMTLevel max circuit MT levels
@@ -40,14 +40,12 @@ export class BaseConfig {
     return this.mtLevel ? this.mtLevel : defaultMTLevels;
   }
   /**
-   *  getMTLevel max circuit MT levels
+   *  GetMTLevelsClaim max jsonld Claim levels
    *
    * @returns number
    */
-  getMTLevelsClaimMerklization(): number {
-    return this.mtLevelClaimsMerklization
-      ? this.mtLevelClaimsMerklization
-      : defaultMTLevelsClaimsMerklization;
+  getMTLevelsClaim(): number {
+    return this.mtLevelClaim ? this.mtLevelClaim : defaultMTLevelsClaim;
   }
 
   /**
@@ -70,8 +68,8 @@ export class BaseConfig {
 }
 
 /**
- * converts hex to Hash
- *
+ * @deprecated The method should not be used and will be removed in the next major version,
+ * please use Hash.fromHex instead
  * @param {(string | undefined)} s - string hex
  * @returns Hash
  */
@@ -99,10 +97,10 @@ export const buildTreeState = (
   revocationTreeRoot: string | undefined,
   rootOfRoots: string | undefined
 ): TreeState => ({
-  state: strMTHex(state),
-  claimsRoot: strMTHex(claimsTreeRoot),
-  revocationRoot: strMTHex(revocationTreeRoot),
-  rootOfRoots: strMTHex(rootOfRoots)
+  state: Hash.fromHex(state),
+  claimsRoot: Hash.fromHex(claimsTreeRoot),
+  revocationRoot: Hash.fromHex(revocationTreeRoot),
+  rootOfRoots: Hash.fromHex(rootOfRoots)
 });
 
 /**
@@ -113,13 +111,13 @@ export const buildTreeState = (
  * @returns string[]
  */
 export const prepareSiblingsStr = (proof: Proof, levels: number): string[] => {
-  const siblings = proof.allSiblings ? proof.allSiblings() : proof.siblings;
+  const siblings = proof.allSiblings();
 
   // Add the rest of empty levels to the siblings
   for (let i = siblings.length; i < levels; i++) {
     siblings.push(ZERO_HASH);
   }
-  return siblings.map((s) => (typeof s === 'string' ? s : s.bigInt().toString()));
+  return siblings.map((s: Hash) => s.bigInt().toString());
 };
 
 /**

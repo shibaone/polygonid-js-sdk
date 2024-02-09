@@ -17,7 +17,7 @@ import {
   CredentialWallet,
   RHSResolver
 } from '../../src/credentials';
-import { ProofService } from '../../src/proof';
+import { NativeProver, ProofService } from '../../src/proof';
 import { CircuitId } from '../../src/circuits';
 import { CredentialStatusType, VerifiableConstants, W3CCredential } from '../../src/verifiable';
 import { RootInfo, StateProof } from '../../src/storage/entities/state';
@@ -93,11 +93,22 @@ describe('sig onchain proofs', () => {
     );
     credWallet = new CredentialWallet(dataStorage, resolvers);
     idWallet = new IdentityWallet(kms, dataStorage, credWallet);
+    const prover = new NativeProver(circuitStorage);
 
-    proofService = new ProofService(idWallet, credWallet, circuitStorage, mockStateStorage);
+    proofService = new ProofService(idWallet, credWallet, circuitStorage, mockStateStorage, {
+      prover
+    });
   });
 
   it('sigv2-onchain-merklized', async () => {
+    await onChainMerklizedTest(CircuitId.AtomicQuerySigV2OnChain);
+  });
+
+  it('sigv3-onchain-merklized', async () => {
+    await onChainMerklizedTest(CircuitId.AtomicQueryV3OnChain);
+  });
+
+  const onChainMerklizedTest = async (circuitId: CircuitId) => {
     const seedPhraseIssuer: Uint8Array = byteEncoder.encode('seedseedseedseedseedseedseedseed');
     const seedPhrase: Uint8Array = byteEncoder.encode('seedseedseedseedseedseedseeduser');
 
@@ -143,7 +154,7 @@ describe('sig onchain proofs', () => {
 
     const proofReq: ZeroKnowledgeProofRequest = {
       id: 1,
-      circuitId: CircuitId.AtomicQuerySigV2OnChain,
+      circuitId: circuitId,
       optional: false,
       query: {
         allowedIssuers: ['*'],
@@ -176,10 +187,7 @@ describe('sig onchain proofs', () => {
       '15045271939084694661437431358729281571840804299863053791890179002991342242959'
     );
 
-    const isValid = await proofService.verifyProof(
-      { proof, pub_signals },
-      CircuitId.AtomicQuerySigV2OnChain
-    );
+    const isValid = await proofService.verifyProof({ proof, pub_signals }, circuitId);
     expect(isValid).to.be.true;
-  });
+  };
 });

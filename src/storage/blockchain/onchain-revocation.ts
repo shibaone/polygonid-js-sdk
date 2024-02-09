@@ -1,14 +1,8 @@
 import { RevocationStatus, Issuer } from '../../verifiable';
-import { BigNumber, ethers } from 'ethers';
-import abi from './onchain-revocation-abi.json';
-import {
-  newHashFromBigInt,
-  Proof,
-  NodeAux,
-  setBitBigEndian,
-  ZERO_HASH
-} from '@iden3/js-merkletree';
+import { Contract, JsonRpcProvider, Signer, TransactionReceipt, TransactionRequest } from 'ethers';
+import { Proof, NodeAuxJSON, Hash } from '@iden3/js-merkletree';
 import { EthConnectionConfig } from './state';
+import abi from '../blockchain/abi/CredentialStatusResolver.json';
 
 /**
  * OnChainRevocationStore is a class that allows to interact with the onchain contract
@@ -18,8 +12,8 @@ import { EthConnectionConfig } from './state';
  * @class OnChainIssuer
  */
 export class OnChainRevocationStorage {
-  private readonly onchainContract: ethers.Contract;
-  private readonly provider: ethers.providers.JsonRpcProvider;
+  private readonly _contract: Contract;
+  private readonly _provider: JsonRpcProvider;
 
   /**
    *
@@ -29,18 +23,31 @@ export class OnChainRevocationStorage {
    * @param {string} - rpc url to connect to the blockchain
    */
 
-  constructor(config: EthConnectionConfig, contractAddress: string) {
-    this.provider = new ethers.providers.JsonRpcProvider(config.url);
-    this.onchainContract = new ethers.Contract(contractAddress, abi, this.provider);
+  constructor(
+    private readonly _config: EthConnectionConfig,
+    contractAddress: string,
+    private _signer?: Signer
+  ) {
+    this._provider = new JsonRpcProvider(_config.url);
+    let contract = new Contract(contractAddress, abi, this._provider);
+    if (this._signer) {
+      this._signer = this._signer.connect(this._provider);
+      contract = contract.connect(this._signer) as Contract;
+    }
+    this._contract = contract;
   }
 
   /**
-   * Get revocation status by nonce from the onchain contract.
+   * Get revocation status by issuerId, issuerState and nonce from the onchain.
    * @public
    * @returns Promise<RevocationStatus>
    */
-  public async getRevocationStatus(issuerID: bigint, nonce: number): Promise<RevocationStatus> {
-    const response = await this.onchainContract.getRevocationStatus(issuerID, nonce);
+  public async getRevocationStatusByIdAndState(
+    issuerID: bigint,
+    state: bigint,
+    nonce: number
+  ): Promise<RevocationStatus> {
+    const response = await this._contract.getRevocationStatusByIdAndState(issuerID, state, nonce);
 
     const issuer = OnChainRevocationStorage.convertIssuerInfo(response.issuer);
     const mtp = OnChainRevocationStorage.convertSmtProofToProof(response.mtp);
@@ -51,12 +58,72 @@ export class OnChainRevocationStorage {
     };
   }
 
-  private static convertIssuerInfo(issuer: unknown[]): Issuer {
+  /**
+   * Get revocation status by nonce from the onchain contract.
+   * @public
+   * @returns Promise<RevocationStatus>
+   */
+  public async getRevocationStatus(issuerID: bigint, nonce: number): Promise<RevocationStatus> {
+    const response = await this._contract.getRevocationStatus(issuerID, nonce);
+
+    const issuer = OnChainRevocationStorage.convertIssuerInfo(response.issuer);
+    const mtp = OnChainRevocationStorage.convertSmtProofToProof(response.mtp);
+
     return {
-      state: newHashFromBigInt(BigNumber.from(issuer[0]).toBigInt()).hex(),
-      claimsTreeRoot: newHashFromBigInt(BigNumber.from(issuer[1]).toBigInt()).hex(),
-      revocationTreeRoot: newHashFromBigInt(BigNumber.from(issuer[2]).toBigInt()).hex(),
-      rootOfRoots: newHashFromBigInt(BigNumber.from(issuer[3]).toBigInt()).hex()
+      issuer,
+      mtp
+    };
+  }
+
+  public async saveNodes(payload: bigint[][]): Promise<TransactionReceipt> {
+    if (!this._signer) {
+      throw new Error('No signer provided');
+    }
+    const feeData = await this._provider.getFeeData();
+
+    const maxFeePerGas = this._config.maxFeePerGas
+      ? BigInt(this._config.maxFeePerGas)
+      : feeData.maxFeePerGas;
+    const maxPriorityFeePerGas = this._config.maxPriorityFeePerGas
+      ? BigInt(this._config.maxPriorityFeePerGas)
+      : feeData.maxPriorityFeePerGas;
+
+    const gasLimit = await this._contract.saveNodes.estimateGas(payload);
+    const txData = await this._contract.saveNodes.populateTransaction(payload);
+
+    const request: TransactionRequest = {
+      to: txData.to,
+      data: txData.data,
+      gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas
+    };
+
+    const tx = await this._signer.sendTransaction(request);
+    return tx.wait().then((txReceipt) => {
+      if (!txReceipt) {
+        throw new Error(`transaction: ${tx.hash} failed to mine`);
+      }
+      const status: number | null = txReceipt.status;
+      const txnHash: string = txReceipt.hash;
+
+      if (!status) {
+        throw new Error(`transaction: ${txnHash} failed to mine`);
+      }
+
+      return txReceipt;
+    });
+  }
+
+  private static convertIssuerInfo(issuer: bigint[]): Issuer {
+    const [state, claimsTreeRoot, revocationTreeRoot, rootOfRoots] = issuer.map((i) =>
+      Hash.fromBigInt(i).hex()
+    );
+    return {
+      state,
+      claimsTreeRoot,
+      revocationTreeRoot,
+      rootOfRoots
     };
   }
 
@@ -67,37 +134,21 @@ export class OnChainRevocationStorage {
     auxExistence: boolean;
     siblings: bigint[];
   }): Proof {
-    const p = new Proof();
-    p.existence = mtp.existence;
-    if (p.existence) {
-      p.nodeAux = {} as NodeAux;
-    } else {
-      if (mtp.auxExistence) {
-        const auxIndex = BigInt(mtp.auxIndex.toString());
-        const auxValue = BigInt(mtp.auxValue.toString());
-        p.nodeAux = {
-          key: newHashFromBigInt(auxIndex),
-          value: newHashFromBigInt(auxValue)
-        } as NodeAux;
-      } else {
-        p.nodeAux = {} as NodeAux;
-      }
+    let nodeAux: NodeAuxJSON | undefined = undefined;
+    const siblings = mtp.siblings?.map((s) => s.toString());
+
+    if (mtp.auxExistence) {
+      const auxIndex = BigInt(mtp.auxIndex.toString());
+      const auxValue = BigInt(mtp.auxValue.toString());
+      nodeAux = {
+        key: auxIndex.toString(),
+        value: auxValue.toString()
+      };
     }
-
-    const s = mtp.siblings?.map((s) => newHashFromBigInt(BigInt(s.toString())));
-
-    p.siblings = [];
-    p.depth = s.length;
-
-    for (let lvl = 0; lvl < s.length; lvl++) {
-      if (s[lvl].bigInt() !== BigInt(0)) {
-        setBitBigEndian(p.notEmpties, lvl);
-        p.siblings.push(s[lvl]);
-      } else {
-        p.siblings.push(ZERO_HASH);
-      }
-    }
-
-    return p;
+    return Proof.fromJSON({
+      existence: mtp.existence,
+      nodeAux,
+      siblings
+    });
   }
 }

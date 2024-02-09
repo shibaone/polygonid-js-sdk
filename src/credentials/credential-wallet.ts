@@ -1,4 +1,4 @@
-import { DID } from '@iden3/js-iden3-core';
+import { DID, getChainId } from '@iden3/js-iden3-core';
 import { IDataStorage } from '../storage/interfaces';
 import {
   W3CCredential,
@@ -9,7 +9,8 @@ import {
   CredentialStatus,
   RevocationStatus,
   CredentialStatusType,
-  IssuerData
+  State,
+  RefreshService
 } from './../verifiable';
 
 import { JSONSchema } from '../schema-processor';
@@ -18,6 +19,7 @@ import { CredentialStatusResolverRegistry } from './status/resolver';
 import { IssuerResolver } from './status/sparse-merkle-tree';
 import { AgentResolver } from './status/agent-revocation';
 import { CredentialStatusResolveOptions } from './status/resolver';
+import { getUserDIDFromCredential } from './utils';
 
 // ErrAllClaimsRevoked all claims are revoked.
 const ErrAllClaimsRevoked = 'all claims are revoked';
@@ -46,6 +48,10 @@ export interface CredentialRequest {
    */
   expiration?: number;
   /**
+   * refreshService
+   */
+  refreshService?: RefreshService;
+  /**
    * claim version
    */
   version?: number;
@@ -66,6 +72,7 @@ export interface CredentialRequest {
    *     id: string;
    *     nonce?: number;
    *     type: CredentialStatusType;
+   *     issuerState?: string;
    *   }}
    * @memberof CredentialRequest
    */
@@ -73,6 +80,7 @@ export interface CredentialRequest {
     id: string;
     nonce?: number;
     type: CredentialStatusType;
+    issuerState?: string;
   };
 }
 
@@ -262,29 +270,19 @@ export class CredentialWallet implements ICredentialWallet {
     const mtpProof = cred.getIden3SparseMerkleTreeProof();
     const sigProof = cred.getBJJSignature2021Proof();
 
-    const issuerData: IssuerData | undefined = mtpProof
-      ? mtpProof.issuerData
-      : sigProof?.issuerData;
-    if (!issuerData) {
-      throw new Error('no sig / mtp proof to check issuer info');
-    }
+    const stateInfo: State | undefined = mtpProof
+      ? mtpProof.issuerData.state
+      : sigProof?.issuerData.state;
     const issuerDID = DID.parse(cred.issuer);
 
-    let userDID: DID;
-    if (!cred.credentialSubject.id) {
-      userDID = issuerDID;
-    } else {
-      if (typeof cred.credentialSubject.id !== 'string') {
-        throw new Error('credential status `id` is not a string');
-      }
-      userDID = DID.parse(cred.credentialSubject.id);
-    }
+    const userDID = getUserDIDFromCredential(issuerDID, cred);
 
     const opts: CredentialStatusResolveOptions = {
-      issuerData,
+      issuerGenesisState: stateInfo,
       issuerDID,
       userDID
     };
+
     return this.getRevocationStatus(cred.credentialStatus, opts);
   }
 
@@ -334,6 +332,7 @@ export class CredentialWallet implements ICredentialWallet {
     cr['@context'] = context;
     cr.type = credentialType;
     cr.expirationDate = expirationDate ? new Date(expirationDate * 1000).toISOString() : undefined;
+    cr.refreshService = request.refreshService;
     cr.issuanceDate = new Date().toISOString();
     cr.credentialSubject = credentialSubject;
     cr.issuer = issuer.string();
@@ -342,19 +341,61 @@ export class CredentialWallet implements ICredentialWallet {
       type: VerifiableConstants.JSON_SCHEMA_VALIDATOR
     };
 
-    const id =
-      request.revocationOpts.type === CredentialStatusType.SparseMerkleTreeProof
-        ? `${request.revocationOpts.id.replace(/\/$/, '')}/${request.revocationOpts.nonce}`
-        : request.revocationOpts.id;
-
-    cr.credentialStatus = {
-      id,
-      revocationNonce: request.revocationOpts.nonce,
-      type: request.revocationOpts.type
-    };
+    cr.credentialStatus = this.buildCredentialStatus(request, issuer);
 
     return cr;
   };
+
+  /**
+   * Builds credential status
+   * @param {CredentialRequest} request
+   * @returns `CredentialStatus`
+   */
+  private buildCredentialStatus(request: CredentialRequest, issuer: DID): CredentialStatus {
+    const credentialStatus: CredentialStatus = {
+      id: request.revocationOpts.id,
+      type: request.revocationOpts.type,
+      revocationNonce: request.revocationOpts.nonce
+    };
+
+    switch (request.revocationOpts.type) {
+      case CredentialStatusType.SparseMerkleTreeProof:
+        return {
+          ...credentialStatus,
+          id: `${credentialStatus.id.replace(/\/$/, '')}/${credentialStatus.revocationNonce}`
+        };
+      case CredentialStatusType.Iden3ReverseSparseMerkleTreeProof:
+        return {
+          ...credentialStatus,
+          id: request.revocationOpts.issuerState
+            ? `${credentialStatus.id.replace(/\/$/, '')}/node?state=${
+                request.revocationOpts.issuerState
+              }`
+            : `${credentialStatus.id.replace(/\/$/, '')}`
+        };
+      case CredentialStatusType.Iden3OnchainSparseMerkleTreeProof2023: {
+        const issuerId = DID.idFromDID(issuer);
+        const chainId = getChainId(DID.blockchainFromId(issuerId), DID.networkIdFromId(issuerId));
+        const searchParams = [
+          ['revocationNonce', request.revocationOpts.nonce?.toString() || ''],
+          ['contractAddress', `${chainId}:${request.revocationOpts.id}`],
+          ['state', request.revocationOpts.issuerState || '']
+        ]
+          .filter(([, value]) => Boolean(value))
+          .map(([key, value]) => `${key}=${value}`)
+          .join('&');
+
+        return {
+          ...credentialStatus,
+          // `[did]:[methodid]:[chain]:[network]:[id]/credentialStatus?(revocationNonce=value)&[contractAddress=[chainID]:[contractAddress]]&(state=issuerState)`
+          id: `${issuer.string()}/credentialStatus?${searchParams}`
+        };
+      }
+      default:
+        return credentialStatus;
+    }
+  }
+
   /**
    * {@inheritDoc ICredentialWallet.findById}
    */

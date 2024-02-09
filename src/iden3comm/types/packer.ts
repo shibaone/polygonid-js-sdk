@@ -13,7 +13,7 @@ export type ProtocolMessage = string;
 /**
  * JSONValue
  */
-type JSONValue = string | number | boolean | object | Array<object>;
+export type JSONValue = string | number | boolean | object | Array<object>;
 
 /**
  * JSON object
@@ -43,7 +43,8 @@ export type PackerParams = {
  */
 export type ZKPPackerParams = PackerParams & {
   senderDID: DID;
-  profileNonce: number;
+  /** @deprecated */
+  profileNonce?: number;
   provingMethodAlg: ProvingMethodAlg;
 };
 

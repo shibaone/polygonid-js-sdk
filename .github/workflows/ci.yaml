@@ -4,7 +4,7 @@ jobs:
   build:
     strategy:
       matrix:
-        version: [18.16.1]
+        version: [20.11.0]
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -58,4 +58,6 @@ jobs:
           WALLET_KEY: ${{ secrets.WALLET_KEY }}
           RPC_URL: ${{ secrets.RPC_URL }}
           RHS_URL: ${{ secrets.RHS_URL }}
+          STATE_CONTRACT_ADDRESS: ${{ secrets.STATE_CONTRACT_ADDRESS }}
+          RHS_CONTRACT_ADDRESS: ${{ secrets.RHS_CONTRACT_ADDRESS }}
         run: npm run test
