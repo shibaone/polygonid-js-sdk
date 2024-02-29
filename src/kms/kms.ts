@@ -19,7 +19,7 @@ export interface IKeyProvider {
    * @param {KmsKeyId} keyID - kms key identifier
    * @returns `Promise<PublicKey>`
    */
-  publicKey(keyID: KmsKeyId): Promise<string>;
+  publicKey(keyID: KmsKeyId): Promise<string | [bigint, bigint]>;
   /**
    * sign data with kms key
    *
@@ -82,7 +82,7 @@ export class KMS {
    * @param {KmsKeyId} keyId -- key id
    * @returns public key
    */
-  async publicKey(keyId: KmsKeyId): Promise<string> {
+  async publicKey(keyId: KmsKeyId): Promise<string | [bigint, bigint]> {
     const keyProvider = this._registry.get(keyId.type);
     if (!keyProvider) {
       throw new Error(`keyProvider not found for: ${keyId.type}`);

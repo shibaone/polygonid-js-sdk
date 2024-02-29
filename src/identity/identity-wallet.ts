@@ -10,9 +10,10 @@ import {
   getUnixTimestamp,
   Id,
   NetworkId,
-  SchemaHash
+  SchemaHash,
+  KeyType
 } from '@iden3/js-iden3-core';
-import { poseidon, PublicKey, sha256, Signature, Hex, getRandomBytes } from '@iden3/js-crypto';
+import { poseidon, sha256, Signature, Hex, getRandomBytes } from '@iden3/js-crypto';
 import { hashElems, ZERO_HASH } from '@iden3/js-merkletree';
 
 import { generateProfileDID, subjectPositionIndex } from './common';
@@ -75,6 +76,7 @@ export type IdentityCreationOptions = {
     };
   };
   seed?: Uint8Array;
+  keyType?: KmsKeyType;
 };
 
 /**
@@ -398,18 +400,18 @@ export class IdentityWallet implements IIdentityWallet {
     await this._storage.mt.createIdentityMerkleTrees(tmpIdentifier);
 
     opts.seed = opts.seed ?? getRandomBytes(32);
+    opts.keyType = opts.keyType ?? KmsKeyType.BabyJubJub;
 
-    const keyId = await this._kms.createKeyFromSeed(KmsKeyType.BabyJubJub, opts.seed);
+    const keyId = await this._kms.createKeyFromSeed(opts.keyType, opts.seed);
 
-    const pubKeyHex = await this._kms.publicKey(keyId);
-
-    const pubKey = PublicKey.newFromHex(pubKeyHex);
-
+    const pubKey = await this._kms.publicKey(keyId);
+    //const pubKey = PublicKey.newFromHex(pubKeyHex.slice(2));
     const schemaHash = SchemaHash.authSchemaHash;
 
     const authClaim = Claim.newClaim(
       schemaHash,
-      ClaimOptions.withIndexDataInts(pubKey.p[0], pubKey.p[1]),
+      ClaimOptions.withKeyType(KeyType.Secp256k1),
+      ClaimOptions.withIndexDataInts(pubKey[0] as bigint, pubKey[1] as bigint),
       ClaimOptions.withRevocationNonce(BigInt(0))
     );
     const revNonce = opts.revocationOpts.nonce ?? 0;
@@ -448,8 +450,8 @@ export class IdentityWallet implements IIdentityWallet {
       credentialSchema: VerifiableConstants.AUTH.AUTH_BJJ_CREDENTIAL_SCHEMA_JSON_URL,
       type: VerifiableConstants.AUTH.AUTH_BJJ_CREDENTIAL_TYPE,
       credentialSubject: {
-        x: pubKey.p[0].toString(),
-        y: pubKey.p[1].toString()
+        x: pubKey[0].toString(),
+        y: pubKey[1].toString()
       },
       subjectPosition: subjectPositionIndex(authClaim.getIdPosition()),
       version: 0,
